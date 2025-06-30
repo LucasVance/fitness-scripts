@@ -173,6 +173,29 @@ if __name__ == "__main__":
             
             print("\n--- Weekly Summary ---")
             # (Weekly summary logic would go here, same as before)
+            num_weeks = (days_needed + 6) // 7
+            for week_idx in range(num_weeks):
+                week_num = week_idx + 1
+                start_day_tss_idx = week_idx * 7
+                end_day_tss_idx = min((week_idx + 1) * 7, days_needed)
+                display_day_start = start_day_tss_idx + 1
+                display_day_end = end_day_tss_idx
+                weekly_tss_values = tss_progression[start_day_tss_idx:end_day_tss_idx]
+                total_weekly_tss = sum(weekly_tss_values) if weekly_tss_values else 0
+                ctl_end_of_week = ctl_progression[display_day_end] 
+                atl_end_of_week = atl_progression[display_day_end]
+                tsb_end_of_week = ctl_end_of_week - atl_end_of_week
+                print(f"Week {week_num} (Days {display_day_start}-{display_day_end}): "
+                        f"Total TSS = {total_weekly_tss:.0f}, "
+                        f"End CTL = {ctl_end_of_week:.1f}, "
+                        f"End ATL = {atl_end_of_week:.1f}, "
+                        f"End TSB = {tsb_end_of_week:.1f}")
+            print("--- End Weekly Summary ---")
 
+
+            save_to_csv_q = input("Save full daily progression to a CSV file? (yes/no): ").strip().lower()
+            if save_to_csv_q == 'yes':
+                # ... (CSV saving logic would also work as is)
+                pass
     else:
         print(f"Could not reach target CTL ({ctl_final_val}) under constraints.")
