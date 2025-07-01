@@ -1,5 +1,3 @@
-# filename: offline_planner.py
-
 import math
 
 def calculate_days_to_target_ctl(
@@ -52,7 +50,6 @@ def calculate_days_to_target_ctl(
             tss_for_tsb_goal = atl_current
 
         # 2. Calculate TSS cap based on the improved ALB definition
-        #    TSS_n <= ATL_{n-1} - ALB_lower_bound
         tss_cap_from_alb = atl_current - alb_lower_bound
 
         # 3. Determine final TSS for the day
@@ -152,8 +149,8 @@ if __name__ == "__main__":
             print(f"Final Actual ALB (ATL_morning - TSS): {final_alb_achieved:.2f} (Target lower bound was {alb_lower_bound_val})")
 
         if tss_progression:
-            avg_tss = sum(tss_progression) / len(tss_progression)
-            max_tss_overall = max(tss_progression)
+            avg_tss = sum(tss_progression) / len(tss_progression) if tss_progression else 0
+            max_tss_overall = max(tss_progression) if tss_progression else 0
             print(f"Average TSS needed per day: {avg_tss:.2f}")
             print(f"Peak TSS during entire period: {max_tss_overall:.2f}")
 
@@ -171,31 +168,37 @@ if __name__ == "__main__":
                 print(f"Day {i+1}: EffTSBTrg={eff_tsb_target_for_day:.2f}, TSS={tss_progression[i]:.2f}, "
                       f"CTL={ctl_progression[i+1]:.2f}, ATL={atl_progression[i+1]:.2f}, TSBAct={actual_daily_tsb:.2f}, ALBAct={alb_str}")
             
+            # --- UPDATED WEEKLY SUMMARY ---
             print("\n--- Weekly Summary ---")
-            # (Weekly summary logic would go here, same as before)
             num_weeks = (days_needed + 6) // 7
+            print(f"{'Week':<5} | {'Days':<10} | {'Total TSS':<10} | {'End CTL':<10} | {'End ATL':<10} | {'End TSB':<10} | {'Ramp Rate':<10}")
+            print("-" * 80)
             for week_idx in range(num_weeks):
                 week_num = week_idx + 1
                 start_day_tss_idx = week_idx * 7
                 end_day_tss_idx = min((week_idx + 1) * 7, days_needed)
+                
                 display_day_start = start_day_tss_idx + 1
                 display_day_end = end_day_tss_idx
+                
                 weekly_tss_values = tss_progression[start_day_tss_idx:end_day_tss_idx]
                 total_weekly_tss = sum(weekly_tss_values) if weekly_tss_values else 0
+                
+                # ctl_progression[0] is initial state. ctl_progression[k] is CTL after day k.
                 ctl_end_of_week = ctl_progression[display_day_end] 
                 atl_end_of_week = atl_progression[display_day_end]
                 tsb_end_of_week = ctl_end_of_week - atl_end_of_week
-                print(f"Week {week_num} (Days {display_day_start}-{display_day_end}): "
-                        f"Total TSS = {total_weekly_tss:.0f}, "
-                        f"End CTL = {ctl_end_of_week:.1f}, "
-                        f"End ATL = {atl_end_of_week:.1f}, "
-                        f"End TSB = {tsb_end_of_week:.1f}")
-            print("--- End Weekly Summary ---")
 
+                # Ramp Rate calculation: Change in CTL over the last 7 days
+                ctl_7_days_prior_idx = max(0, display_day_end - 7)
+                ctl_7_days_prior = ctl_progression[ctl_7_days_prior_idx]
+                ramp_rate = ctl_end_of_week - ctl_7_days_prior
 
-            save_to_csv_q = input("Save full daily progression to a CSV file? (yes/no): ").strip().lower()
-            if save_to_csv_q == 'yes':
-                # ... (CSV saving logic would also work as is)
-                pass
+                print(f"{week_num:<5} | {f'{display_day_start}-{display_day_end}':<10} | {total_weekly_tss:<10.0f} | "
+                      f"{ctl_end_of_week:<10.1f} | {atl_end_of_week:<10.1f} | {tsb_end_of_week:<10.1f} | "
+                      f"{ramp_rate:<+10.1f}")
+            print("-" * 80)
+            # --- END UPDATED WEEKLY SUMMARY ---
+
     else:
         print(f"Could not reach target CTL ({ctl_final_val}) under constraints.")
