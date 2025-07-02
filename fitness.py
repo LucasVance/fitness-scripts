@@ -16,12 +16,8 @@ def calculate_days_to_target_ctl(
     # --- Calculate constants from the user-defined time periods ---
     c = ctl_days
     a = atl_days
-
-    # Multipliers for "yesterday's" load
     kc = (c - 1) / c
     ka = (a - 1) / a
-    
-    # Multiplier for the TSS difference when calculating TSB: (1/c - 1/a)
     tsb_tss_multiplier = (1/c) - (1/a)
 
     # Initialize data loggers
@@ -46,28 +42,22 @@ def calculate_days_to_target_ctl(
         if abs(tsb_tss_multiplier) > 1e-9:
             numerator = tsb_final_target - (ctl_current * kc) + (atl_current * ka)
             tss_for_tsb_goal = numerator / tsb_tss_multiplier
-        else: # Handle c=a case
+        else:
             tss_for_tsb_goal = atl_current
 
         # 2. Calculate TSS cap based on the improved ALB definition
         tss_cap_from_alb = atl_current - alb_lower_bound
 
         # 3. Determine final TSS for the day
-        tss_needed = tss_for_tsb_goal
-        if tss_needed > tss_cap_from_alb:
-            tss_needed = tss_cap_from_alb
-
+        tss_needed = min(tss_for_tsb_goal, tss_cap_from_alb)
         tss_needed = max(0, tss_needed)
 
-        # For logging: what effective TSB target does this tss_needed correspond to?
         effective_tsb_target_for_logging = (ctl_current * kc - atl_current * ka) + tss_needed * tsb_tss_multiplier
         daily_effective_tsb_target_history.append(effective_tsb_target_for_logging)
 
-        # Calculate actual ALB using the new definition: ATL_morning - TSS_day
         actual_alb = atl_current - tss_needed
         daily_alb_actual_history.append(actual_alb)
 
-        # Calculate next day's CTL and ATL
         atl_next = (atl_current * ka) + (tss_needed * (1/a))
         ctl_next = (ctl_current * kc) + (tss_needed * (1/c))
 
@@ -136,6 +126,8 @@ if __name__ == "__main__":
         final_atl_val = atl_progression[-1]
         final_tsb_achieved = final_ctl_val - final_atl_val
         final_alb_achieved = daily_alb_values[-1] if daily_alb_values else "N/A"
+        # Calculate final Shape
+        final_shape = (2 * final_ctl_val) - final_atl_val
 
         if days_needed == 0:
             print(f"Initial CTL ({ctl_initial_val:.2f}) already meets or exceeds target CTL ({ctl_final_val:.2f}).")
@@ -144,9 +136,11 @@ if __name__ == "__main__":
 
         print(f"Final CTL: {final_ctl_val:.2f}, Final ATL: {final_atl_val:.2f}")
         effective_tsb_on_final_day = f"{daily_effective_tsb_targets[-1]:.2f}" if daily_effective_tsb_targets else "N/A"
-        print(f"Final Actual TSB (CTL-ATL): {final_tsb_achieved:.2f} (Effective TSB target on final day: {effective_tsb_on_final_day})")
+        print(f"Final Actual TSB (CTL-ATL): {final_tsb_achieved:.2f}")
         if isinstance(final_alb_achieved, float):
-            print(f"Final Actual ALB (ATL_morning - TSS): {final_alb_achieved:.2f} (Target lower bound was {alb_lower_bound_val})")
+            print(f"Final Actual ALB (ATL_morning - TSS): {final_alb_achieved:.2f}")
+        # Print final Shape
+        print(f"Final Shape (2*CTL - ATL): {final_shape:.2f}")
 
         if tss_progression:
             avg_tss = sum(tss_progression) / len(tss_progression) if tss_progression else 0
@@ -157,22 +151,27 @@ if __name__ == "__main__":
         print("-" * 30)
         show_details_q = input("Show full daily progression in console? (yes/no): ").strip().lower()
         if show_details_q == 'yes':
-            print("\nDaily Progression (Day: EffTSB_Trg, ActualTSS, CTL, ATL, ActualTSB, ActualALB):")
+            # --- UPDATED: Added 'Shape' to daily header ---
+            print("\nDaily Progression (Day: EffTSB_Trg, ActualTSS, CTL, ATL, ActualTSB, ActualALB, Shape):")
             start_tsb = ctl_progression[0] - atl_progression[0]
-            print(f"Start: ---, ---, CTL={ctl_progression[0]:.2f}, ATL={atl_progression[0]:.2f}, TSB={start_tsb:.2f}, ALB=N/A")
+            start_shape = (2 * ctl_progression[0]) - atl_progression[0]
+            print(f"Start: ---, ---, CTL={ctl_progression[0]:.2f}, ATL={atl_progression[0]:.2f}, TSB={start_tsb:.2f}, ALB=N/A, Shape={start_shape:.2f}")
             for i in range(days_needed):
                 actual_daily_tsb = ctl_progression[i+1] - atl_progression[i+1]
                 actual_daily_alb = daily_alb_values[i]
                 eff_tsb_target_for_day = daily_effective_tsb_targets[i]
+                # --- NEW: Calculate Shape for the day ---
+                actual_daily_shape = (2 * ctl_progression[i+1]) - atl_progression[i+1]
                 alb_str = f"{actual_daily_alb:.2f}"
                 print(f"Day {i+1}: EffTSBTrg={eff_tsb_target_for_day:.2f}, TSS={tss_progression[i]:.2f}, "
-                      f"CTL={ctl_progression[i+1]:.2f}, ATL={atl_progression[i+1]:.2f}, TSBAct={actual_daily_tsb:.2f}, ALBAct={alb_str}")
+                      f"CTL={ctl_progression[i+1]:.2f}, ATL={atl_progression[i+1]:.2f}, TSBAct={actual_daily_tsb:.2f}, ALBAct={alb_str}, "
+                      f"Shape={actual_daily_shape:.2f}")
             
-            # --- UPDATED WEEKLY SUMMARY ---
+            # --- UPDATED: Added 'Shape' to weekly summary ---
             print("\n--- Weekly Summary ---")
             num_weeks = (days_needed + 6) // 7
-            print(f"{'Week':<5} | {'Days':<10} | {'Total TSS':<10} | {'End CTL':<10} | {'End ATL':<10} | {'End TSB':<10} | {'Ramp Rate':<10}")
-            print("-" * 80)
+            print(f"{'Week':<5} | {'Days':<10} | {'Total TSS':<10} | {'End CTL':<10} | {'End ATL':<10} | {'End TSB':<10} | {'End Shape':<10} | {'Ramp Rate':<10}")
+            print("-" * 95)
             for week_idx in range(num_weeks):
                 week_num = week_idx + 1
                 start_day_tss_idx = week_idx * 7
@@ -184,21 +183,20 @@ if __name__ == "__main__":
                 weekly_tss_values = tss_progression[start_day_tss_idx:end_day_tss_idx]
                 total_weekly_tss = sum(weekly_tss_values) if weekly_tss_values else 0
                 
-                # ctl_progression[0] is initial state. ctl_progression[k] is CTL after day k.
                 ctl_end_of_week = ctl_progression[display_day_end] 
                 atl_end_of_week = atl_progression[display_day_end]
                 tsb_end_of_week = ctl_end_of_week - atl_end_of_week
+                # --- NEW: Calculate Shape for end of week ---
+                shape_end_of_week = (2 * ctl_end_of_week) - atl_end_of_week
 
-                # Ramp Rate calculation: Change in CTL over the last 7 days
                 ctl_7_days_prior_idx = max(0, display_day_end - 7)
                 ctl_7_days_prior = ctl_progression[ctl_7_days_prior_idx]
                 ramp_rate = ctl_end_of_week - ctl_7_days_prior
 
                 print(f"{week_num:<5} | {f'{display_day_start}-{display_day_end}':<10} | {total_weekly_tss:<10.0f} | "
                       f"{ctl_end_of_week:<10.1f} | {atl_end_of_week:<10.1f} | {tsb_end_of_week:<10.1f} | "
-                      f"{ramp_rate:<+10.1f}")
-            print("-" * 80)
-            # --- END UPDATED WEEKLY SUMMARY ---
+                      f"{shape_end_of_week:<10.1f} | {ramp_rate:<+10.1f}")
+            print("-" * 95)
 
     else:
         print(f"Could not reach target CTL ({ctl_final_val}) under constraints.")
