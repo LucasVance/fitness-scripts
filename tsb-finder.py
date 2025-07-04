@@ -1,11 +1,30 @@
-# filename: tsb_calibrator.py
+# filename: tsb-finder.py
 
 import math
+import os
+import platform
 
-def _simulate_and_get_ramp_rate(tsb_target, ctl_days, atl_days, start_ctl=60.0):
+def get_float_input(prompt_text):
     """
-    Internal helper to simulate a training block and measure the weekly TSS ramp rate.
-    Returns the average increase in weekly TSS during a stable period.
+    Gets a float input from the user. Returns None if the user enters nothing.
+    """
+    while True:
+        try:
+            val_str = input(f"{prompt_text}: ").strip()
+            if not val_str:
+                return None  # Return None for blank input
+            return float(val_str)
+        except ValueError:
+            print("Invalid input. Please enter a numeric value or leave it blank.")
+
+def _simulate_and_get_metrics(tsb_target, ctl_days, atl_days, start_ctl=60.0):
+    """
+    Internal helper to simulate a block and return key metrics.
+    
+    Returns:
+        - avg_weekly_tss_total: The average total TSS per week in a stable period.
+        - avg_ctl_ramp_rate: The average weekly change in CTL.
+        - avg_weekly_tss_change: The average weekly change in total TSS.
     """
     ctl_current = start_ctl
     atl_current = ctl_current - tsb_target 
@@ -17,6 +36,7 @@ def _simulate_and_get_ramp_rate(tsb_target, ctl_days, atl_days, start_ctl=60.0):
     tsb_tss_multiplier = (1/c) - (1/a)
 
     weekly_tss_totals = []
+    daily_ctl_history = [ctl_current]
     
     num_days_to_simulate = 12 * 7 
     current_week_tss = 0
@@ -33,75 +53,133 @@ def _simulate_and_get_ramp_rate(tsb_target, ctl_days, atl_days, start_ctl=60.0):
         
         atl_current = (atl_current * ka) + (tss_needed * (1/a))
         ctl_current = (ctl_current * kc) + (tss_needed * (1/c))
+        daily_ctl_history.append(ctl_current)
 
         if day % 7 == 0:
             weekly_tss_totals.append(current_week_tss)
             current_week_tss = 0
             
+    # --- Define Stable Period for Analysis ---
     stable_period_start_week = 4
     stable_period_end_week = 11
     
-    if len(weekly_tss_totals) <= stable_period_start_week:
-        return 0
+    if len(daily_ctl_history) < stable_period_end_week * 7 or len(weekly_tss_totals) <= stable_period_start_week:
+        return 0, 0, 0
 
-    ramp_rates = []
-    for i in range(stable_period_start_week, stable_period_end_week):
-        ramp_rate = weekly_tss_totals[i] - weekly_tss_totals[i-1]
-        ramp_rates.append(ramp_rate)
-
-    avg_ramp_rate = sum(ramp_rates) / len(ramp_rates) if ramp_rates else 0
-    return avg_ramp_rate
-
-def find_tsb_for_ramp_rate(target_ramp_rate, ctl_days, atl_days):
-    """
-    Uses a binary search to find the TSB value that produces the target weekly TSS ramp rate.
-    """
-    print(f"\nSearching for TSB value for a {target_ramp_rate:.1f} TSS/wk ramp with {ctl_days}/{atl_days} constants...")
+    # --- Metric 1: Average Weekly CTL Ramp Rate ---
+    ctl_ramp_rates = []
+    for week_num in range(stable_period_start_week, stable_period_end_week + 1):
+        ctl_end = daily_ctl_history[week_num * 7]
+        ctl_start = daily_ctl_history[(week_num - 1) * 7]
+        ctl_ramp_rates.append(ctl_end - ctl_start)
+    avg_ctl_ramp_rate = sum(ctl_ramp_rates) / len(ctl_ramp_rates) if ctl_ramp_rates else 0
     
-    # Using clearer variable names for the search boundaries
-    upper_bound_tsb = 20.0   # The highest, least aggressive TSB
-    lower_bound_tsb = -100.0 # The lowest, most aggressive TSB
+    # --- Metric 2: Average Total Weekly TSS ---
+    stable_weekly_tss = weekly_tss_totals[stable_period_start_week-1:stable_period_end_week]
+    avg_weekly_tss_total = sum(stable_weekly_tss) / len(stable_weekly_tss) if stable_weekly_tss else 0
+
+    # --- Metric 3: Average Weekly TSS Change (The Fix) ---
+    tss_change_rates = []
+    # Iterate from the start week to the one before the end week
+    for i in range(stable_period_start_week, stable_period_end_week):
+        # Calculate difference between a week and the week prior
+        change = weekly_tss_totals[i] - weekly_tss_totals[i-1]
+        tss_change_rates.append(change)
+    avg_weekly_tss_change = sum(tss_change_rates) / len(tss_change_rates) if tss_change_rates else 0
+
+    return avg_weekly_tss_total, avg_ctl_ramp_rate, avg_weekly_tss_change
+
+def _find_tsb_for_metric(target_value, metric_to_target, ctl_days, atl_days):
+    """
+    Generic binary search function to find the TSB for a given target metric.
+    """
+    print(f"\nSearching for TSB value that produces a target {metric_to_target} of {target_value:.1f}...")
+    
+    upper_bound_tsb, lower_bound_tsb = 20.0, -100.0
 
     for i in range(15):
         mid_tsb = (upper_bound_tsb + lower_bound_tsb) / 2
+        avg_tss_total, avg_ctl_ramp, avg_tss_change = _simulate_and_get_metrics(mid_tsb, ctl_days, atl_days)
         
-        measured_ramp_rate = _simulate_and_get_ramp_rate(mid_tsb, ctl_days, atl_days)
-        
-        print(f"  -> Test TSB: {mid_tsb:6.2f} -> Ramp Rate: {measured_ramp_rate:5.1f} TSS/wk", end="")
-        
-        # --- THIS IS THE DEFINITIVELY CORRECTED LOGIC ---
-        if measured_ramp_rate > target_ramp_rate:
-            # Measured ramp is too high, so the test TSB is too aggressive (too negative).
-            # The true value must be HIGHER (less negative) than mid_tsb.
-            # Therefore, mid_tsb becomes the new "most aggressive" possible value (the lower bound).
-            print(" (Too High)")
+        if metric_to_target == "CTL Ramp":
+            measured_value = avg_ctl_ramp
+        elif metric_to_target == "Weekly TSS Change":
+            measured_value = avg_tss_change
+        else: # Default to Total Weekly TSS
+            measured_value = avg_tss_total
+
+        # A more negative TSB leads to a HIGHER ramp/TSS.
+        if measured_value > target_value:
             lower_bound_tsb = mid_tsb
         else:
-            # Measured ramp is too low, so the test TSB is not aggressive enough (too positive).
-            # The true value must be LOWER (more negative) than mid_tsb.
-            # Therefore, mid_tsb becomes the new "least aggressive" possible value (the upper bound).
-            print(" (Too Low)")
             upper_bound_tsb = mid_tsb
-    
-    final_tsb = (upper_bound_tsb + lower_bound_tsb) / 2
-    return final_tsb
+            
+    return (upper_bound_tsb + lower_bound_tsb) / 2
 
-# --- Main program execution ---
-if __name__ == "__main__":
-    print("--- TSB Calibration Tool ---")
-    print("This script calculates the TSB value that corresponds to a desired")
-    print("weekly increase in training load (TSS ramp rate) for any given")
-    print("CTL and ATL time constants.")
-    
+def run_calibrator():
+    """Runs one cycle of the calibration calculation."""
     print("\n--- Model Time Constants ---")
-    ctl_period_input = int(input("Enter the CTL period in days (e.g., 32): "))
+    ctl_period_input = int(input("Enter the CTL period in days (e.g., 40): "))
     atl_period_input = int(input("Enter the ATL period in days (e.g., 4): "))
+
+    print("\n--- Enter ONE of the following metrics ---")
+    print("Leave the other two blank and press Enter.")
     
-    print("\n--- Target Ramp Rate ---")
-    target_ramp_input = float(input("Enter your desired weekly TSS ramp rate (e.g., 49): "))
+    target_tsb = get_float_input("Enter Target TSB")
+    target_ctl_ramp = get_float_input("Enter Target Weekly CTL Ramp Rate")
+    target_tss_change = get_float_input("Enter Target Weekly TSS Change")
+
+    inputs = {
+        "TSB": target_tsb,
+        "CTL Ramp": target_ctl_ramp,
+        "Weekly TSS Change": target_tss_change,
+    }
     
-    equivalent_tsb = find_tsb_for_ramp_rate(target_ramp_input, ctl_period_input, atl_period_input)
+    provided_values = {k: v for k, v in inputs.items() if v is not None}
+    
+    if len(provided_values) != 1:
+        print("\nERROR: Please provide a value for exactly ONE of the three metrics.")
+        return
+
+    # --- Calculations ---
+    final_tsb = 0
+    input_metric_name, input_metric_value = list(provided_values.items())[0]
+
+    if input_metric_name == "TSB":
+        final_tsb = input_metric_value
+    else: # CTL Ramp or Weekly TSS Change
+        final_tsb = _find_tsb_for_metric(input_metric_value, input_metric_name, ctl_period_input, atl_period_input)
+    
+    # Run one final simulation with the determined TSB to get all final metrics
+    final_weekly_tss_total, final_ctl_ramp, final_tss_change = _simulate_and_get_metrics(final_tsb, ctl_period_input, atl_period_input)
     
     print("\n--- Calibration Complete ---")
-    print(f"For a CTL/ATL period of {ctl_period_input}/{atl_period_input} days, a TSB of ~{equivalent_tsb:.2f}")
-    print(f"corresponds to a weekly TSS ramp rate of approximately {target_ramp_input:.1f} TSS/week.")
+    print(f"For a {ctl_period_input}/{atl_period_input} day model, the following values are equivalent:")
+    print("-" * 50)
+    print(f"  > Target TSB:                {final_tsb:.2f}")
+    print(f"  > Avg. Weekly CTL Ramp:      {final_ctl_ramp:+.1f} CTL/wk")
+    print(f"  > Avg. Weekly TSS Change:    {final_tss_change:+.1f} TSS/wk")
+    print("-" * 50)
+    print(f"  (For reference, Avg. Total Weekly TSS: {final_weekly_tss_total:.1f})")
+
+
+def main():
+    """Main execution loop for the calibrator tool."""
+    command = 'cls' if platform.system().lower() == 'windows' else 'clear'
+    os.system(command)
+
+    print("--- Training Model Calibrator (v2) ---")
+    print("This tool translates between key progression metrics:")
+    print("TSB, Weekly CTL Ramp, and Weekly TSS Change.")
+    
+    while True:
+        run_calibrator()
+
+        another = input("\nCalculate another? (Y/n): ").strip().lower()
+        if another in ['n', 'q', 'no', 'quit']:
+            break
+        else:
+            print("\n" + "="*50 + "\n")
+
+if __name__ == "__main__":
+    main()
