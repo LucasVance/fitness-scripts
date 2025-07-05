@@ -1,8 +1,8 @@
 # filename: tsb-finder.py
 
 import math
-import os
 import platform
+import os
 
 def get_float_input(prompt_text):
     """
@@ -80,9 +80,7 @@ def _simulate_and_get_metrics(tsb_target, ctl_days, atl_days, start_ctl=60.0):
 
     # --- Metric 3: Average Weekly TSS Change (The Fix) ---
     tss_change_rates = []
-    # Iterate from the start week to the one before the end week
     for i in range(stable_period_start_week, stable_period_end_week):
-        # Calculate difference between a week and the week prior
         change = weekly_tss_totals[i] - weekly_tss_totals[i-1]
         tss_change_rates.append(change)
     avg_weekly_tss_change = sum(tss_change_rates) / len(tss_change_rates) if tss_change_rates else 0
@@ -108,7 +106,6 @@ def _find_tsb_for_metric(target_value, metric_to_target, ctl_days, atl_days):
         else: # Default to Total Weekly TSS
             measured_value = avg_tss_total
 
-        # A more negative TSB leads to a HIGHER ramp/TSS.
         if measured_value > target_value:
             lower_bound_tsb = mid_tsb
         else:
@@ -125,9 +122,9 @@ def run_calibrator():
     print("\n--- Enter ONE of the following metrics ---")
     print("Leave the other two blank and press Enter.")
     
-    target_tsb = get_float_input("Enter Target TSB")
-    target_ctl_ramp = get_float_input("Enter Target Weekly CTL Ramp Rate")
-    target_tss_change = get_float_input("Enter Target Weekly TSS Change")
+    target_tsb = get_float_input("Constant TSB")
+    target_ctl_ramp = get_float_input("Ramp Rate")
+    target_tss_change = get_float_input("Weekly TSS Change")
 
     inputs = {
         "TSB": target_tsb,
@@ -147,39 +144,25 @@ def run_calibrator():
 
     if input_metric_name == "TSB":
         final_tsb = input_metric_value
-    else: # CTL Ramp or Weekly TSS Change
+    else:
         final_tsb = _find_tsb_for_metric(input_metric_value, input_metric_name, ctl_period_input, atl_period_input)
     
-    # Run one final simulation with the determined TSB to get all final metrics
     final_weekly_tss_total, final_ctl_ramp, final_tss_change = _simulate_and_get_metrics(final_tsb, ctl_period_input, atl_period_input)
     
     print("\n--- Calibration Complete ---")
     print(f"For a {ctl_period_input}/{atl_period_input} day model, the following values are equivalent:")
-    print("-" * 50)
-    print(f"  > Target TSB:                {final_tsb:.2f}")
-    print(f"  > Avg. Weekly CTL Ramp:      {final_ctl_ramp:+.1f} CTL/wk")
-    print(f"  > Avg. Weekly TSS Change:    {final_tss_change:+.1f} TSS/wk")
-    print("-" * 50)
-    print(f"  (For reference, Avg. Total Weekly TSS: {final_weekly_tss_total:.1f})")
-
+    print("\n")
+    print(f"Constant TSB:      {final_tsb:.2f}")
+    print(f"Ramp rate:         {final_ctl_ramp:+.1f} CTL/wk")
+    print(f"Weekly TSS change: {final_tss_change:+.1f} TSS/wk")
 
 def main():
-    """Main execution loop for the calibrator tool."""
-    command = 'cls' if platform.system().lower() == 'windows' else 'clear'
-    os.system(command)
-
-    print("--- Training Model Calibrator (v2) ---")
+    """Main execution for the calibrator tool."""
+    print("--- Training Model Calibrator ---")
     print("This tool translates between key progression metrics:")
-    print("TSB, Weekly CTL Ramp, and Weekly TSS Change.")
+    print("TSB, Ramp Rate, and Weekly TSS Change.")
     
-    while True:
-        run_calibrator()
-
-        another = input("\nCalculate another? (Y/n): ").strip().lower()
-        if another in ['n', 'q', 'no', 'quit']:
-            break
-        else:
-            print("\n" + "="*50 + "\n")
+    run_calibrator() # Runs the main calculation once
 
 if __name__ == "__main__":
     main()
