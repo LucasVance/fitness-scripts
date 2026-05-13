@@ -1,14 +1,17 @@
 import math
 
 def calculate_days_to_target_ctl(
-    ctl_initial, atl_initial, ctl_final, tsb_final_target,
-    alb_lower_bound,
+    ctl_initial, atl_initial, ctl_final,
     ctl_days,
-    atl_days
+    atl_days,
+    mode='tsb',
+    tsb_final_target=None,
+    alb_lower_bound=None,
+    ramp_rate_per_week=None
 ):
     """
     Calculates the daily training progression based on provided goals and constraints.
-    This version is fully generalized to support custom CTL and ATL time periods.
+    Supports either TSB/ALB mode or TSS Ramp Rate mode.
     """
     ctl_current = float(ctl_initial)
     atl_current = float(atl_initial)
@@ -25,35 +28,35 @@ def calculate_days_to_target_ctl(
     ctl_history = [ctl_current]
     atl_history = [atl_current]
     tss_history = []
-    daily_effective_tsb_target_history = []
     daily_alb_actual_history = []
 
     max_simulation_days = 365 * 10
 
     if ctl_final <= ctl_current and not (ctl_final < ctl_current):
-         return 0, [ctl_current], [atl_current], [], [], []
+         return 0, [ctl_current], [atl_current], [], []
 
     building_ctl = ctl_final > ctl_current
 
     for day_iter in range(max_simulation_days):
         days = day_iter
 
-        # 1. Calculate TSS needed to aim for tsb_final_target
-        if abs(tsb_tss_multiplier) > 1e-9:
-            numerator = tsb_final_target - (ctl_current * kc) + (atl_current * ka)
-            tss_for_tsb_goal = numerator / tsb_tss_multiplier
-        else:
-            tss_for_tsb_goal = atl_current
+        if mode == 'tsb':
+            # 1. Calculate TSS needed to aim for tsb_final_target
+            if abs(tsb_tss_multiplier) > 1e-9:
+                numerator = tsb_final_target - (ctl_current * kc) + (atl_current * ka)
+                tss_for_tsb_goal = numerator / tsb_tss_multiplier
+            else:
+                tss_for_tsb_goal = atl_current
 
-        # 2. Calculate TSS cap based on the improved ALB definition
-        tss_cap_from_alb = atl_current - alb_lower_bound
+            # 2. Calculate TSS cap based on the improved ALB definition
+            tss_cap_from_alb = atl_current - alb_lower_bound
 
-        # 3. Determine final TSS for the day
-        tss_needed = min(tss_for_tsb_goal, tss_cap_from_alb)
+            # 3. Determine final TSS for the day
+            tss_needed = min(tss_for_tsb_goal, tss_cap_from_alb)
+        elif mode == 'ramp_rate':
+            tss_needed = ctl_current + (ramp_rate_per_week / 7) * c
+
         tss_needed = max(0, tss_needed)
-
-        effective_tsb_target_for_logging = (ctl_current * kc - atl_current * ka) + tss_needed * tsb_tss_multiplier
-        daily_effective_tsb_target_history.append(effective_tsb_target_for_logging)
 
         actual_alb = atl_current - tss_needed
         daily_alb_actual_history.append(actual_alb)
@@ -70,10 +73,10 @@ def calculate_days_to_target_ctl(
 
         if (building_ctl and ctl_current >= ctl_final) or \
            (not building_ctl and ctl_current <= ctl_final):
-            return days + 1, ctl_history, atl_history, tss_history, daily_effective_tsb_target_history, daily_alb_actual_history
+            return days + 1, ctl_history, atl_history, tss_history, daily_alb_actual_history
 
     print(f"\nReached maximum simulation days ({max_simulation_days}).")
-    return -1, ctl_history, atl_history, tss_history, daily_effective_tsb_target_history, daily_alb_actual_history
+    return -1, ctl_history, atl_history, tss_history, daily_alb_actual_history
 
 def get_float_input(prompt_text, allow_empty_for_default=False, default_val=0.0):
     while True:
@@ -106,19 +109,41 @@ if __name__ == "__main__":
     ctl_initial_val = get_float_input("Enter Initial CTL: ")
     atl_initial_val = get_float_input("Enter Initial ATL: ")
     ctl_final_val = get_float_input("Enter Target CTL (CTL final): ")
-    tsb_final_target_val = get_float_input("Enter Final Target TSB (CTL - ATL) to aim for daily: ")
 
-    default_alb_unrestricted = -200.0
-    alb_lower_bound_val = get_float_input(
-        f"Enter Minimum ALB (ATL_morning - Daily_TSS) you can take (e.g., -30; default {default_alb_unrestricted}): ",
-        allow_empty_for_default=True, default_val=default_alb_unrestricted
-    )
+    print("\n--- Calculation Mode ---")
+    print("1. TSB / ALB Target Mode (Original)")
+    print("2. TSS Ramp Rate Mode (e.g. +4.0 CTL/week)")
+    while True:
+        mode_choice = input("Select mode (1 or 2): ").strip()
+        if mode_choice in ['1', '2']:
+            break
+        print("Invalid choice. Please enter 1 or 2.")
+
+    tsb_final_target_val = None
+    alb_lower_bound_val = None
+    ramp_rate_val = None
+
+    if mode_choice == '1':
+        calc_mode = 'tsb'
+        tsb_final_target_val = get_float_input("Enter Final Target TSB (CTL - ATL) to aim for daily: ")
+        default_alb_unrestricted = -200.0
+        alb_lower_bound_val = get_float_input(
+            f"Enter Minimum ALB (ATL_morning - Daily_TSS) you can take (e.g., -30; default {default_alb_unrestricted}): ",
+            allow_empty_for_default=True, default_val=default_alb_unrestricted
+        )
+    else:
+        calc_mode = 'ramp_rate'
+        ramp_rate_val = get_float_input("Enter Target TSS Ramp Rate per week (e.g. 4.0): ")
 
     print(f"\nCalculating days to reach CTL {ctl_final_val} ...\n")
     days_needed, ctl_progression, atl_progression, tss_progression, \
-    daily_effective_tsb_targets, daily_alb_values = calculate_days_to_target_ctl(
-        ctl_initial_val, atl_initial_val, ctl_final_val, tsb_final_target_val,
-        alb_lower_bound_val, ctl_period, atl_period
+    daily_alb_values = calculate_days_to_target_ctl(
+        ctl_initial=ctl_initial_val, atl_initial=atl_initial_val, ctl_final=ctl_final_val,
+        ctl_days=ctl_period, atl_days=atl_period,
+        mode=calc_mode,
+        tsb_final_target=tsb_final_target_val,
+        alb_lower_bound=alb_lower_bound_val,
+        ramp_rate_per_week=ramp_rate_val
     )
 
     if days_needed != -1:
@@ -135,10 +160,9 @@ if __name__ == "__main__":
             print(f"It will take approximately {days_needed} days to reach a CTL of {final_ctl_val:.2f}.")
 
         print(f"Final CTL: {final_ctl_val:.2f}, Final ATL: {final_atl_val:.2f}")
-        effective_tsb_on_final_day = f"{daily_effective_tsb_targets[-1]:.2f}" if daily_effective_tsb_targets else "N/A"
         print(f"Final Actual TSB (CTL-ATL): {final_tsb_achieved:.2f}")
-        if isinstance(final_alb_achieved, float):
-            print(f"Final Actual ALB (ATL_morning - TSS): {final_alb_achieved:.2f}")
+        if calc_mode == 'tsb' and isinstance(final_alb_achieved, float):
+            print(f"Final ALB (ATL_morning - TSS): {final_alb_achieved:.2f}")
         # Print final Shape
         print(f"Final Shape (2*CTL - ATL): {final_shape:.2f}")
 
@@ -151,21 +175,30 @@ if __name__ == "__main__":
         print("-" * 30)
         show_details_q = input("Show full daily progression in console? (yes/no): ").strip().lower()
         if show_details_q == 'yes':
-            # --- UPDATED: Added 'Shape' to daily header ---
-            print("\nDaily Progression (Day: EffTSB_Trg, ActualTSS, CTL, ATL, ActualTSB, ActualALB, Shape):")
-            start_tsb = ctl_progression[0] - atl_progression[0]
-            start_shape = (2 * ctl_progression[0]) - atl_progression[0]
-            print(f"Start: ---, ---, CTL={ctl_progression[0]:.2f}, ATL={atl_progression[0]:.2f}, TSB={start_tsb:.2f}, ALB=N/A, Shape={start_shape:.2f}")
-            for i in range(days_needed):
-                actual_daily_tsb = ctl_progression[i+1] - atl_progression[i+1]
-                actual_daily_alb = daily_alb_values[i]
-                eff_tsb_target_for_day = daily_effective_tsb_targets[i]
-                # --- NEW: Calculate Shape for the day ---
-                actual_daily_shape = (2 * ctl_progression[i+1]) - atl_progression[i+1]
-                alb_str = f"{actual_daily_alb:.2f}"
-                print(f"Day {i+1}: EffTSBTrg={eff_tsb_target_for_day:.2f}, TSS={tss_progression[i]:.2f}, "
-                      f"CTL={ctl_progression[i+1]:.2f}, ATL={atl_progression[i+1]:.2f}, TSBAct={actual_daily_tsb:.2f}, ALBAct={alb_str}, "
-                      f"Shape={actual_daily_shape:.2f}")
+            if calc_mode == 'tsb':
+                print("\nDaily Progression (Day: ActualTSS, CTL, ATL, ActualTSB, ALB, Shape):")
+                start_tsb = ctl_progression[0] - atl_progression[0]
+                start_shape = (2 * ctl_progression[0]) - atl_progression[0]
+                print(f"Start: ---, CTL={ctl_progression[0]:.2f}, ATL={atl_progression[0]:.2f}, TSB={start_tsb:.2f}, ALB=N/A, Shape={start_shape:.2f}")
+                for i in range(days_needed):
+                    actual_daily_tsb = ctl_progression[i+1] - atl_progression[i+1]
+                    actual_daily_alb = daily_alb_values[i]
+                    actual_daily_shape = (2 * ctl_progression[i+1]) - atl_progression[i+1]
+                    alb_str = f"{actual_daily_alb:.2f}"
+                    print(f"Day {i+1}: TSS={tss_progression[i]:.2f}, "
+                          f"CTL={ctl_progression[i+1]:.2f}, ATL={atl_progression[i+1]:.2f}, TSBAct={actual_daily_tsb:.2f}, ALB={alb_str}, "
+                          f"Shape={actual_daily_shape:.2f}")
+            else:
+                print("\nDaily Progression (Day: ActualTSS, CTL, ATL, ActualTSB, Shape):")
+                start_tsb = ctl_progression[0] - atl_progression[0]
+                start_shape = (2 * ctl_progression[0]) - atl_progression[0]
+                print(f"Start: ---, CTL={ctl_progression[0]:.2f}, ATL={atl_progression[0]:.2f}, TSB={start_tsb:.2f}, Shape={start_shape:.2f}")
+                for i in range(days_needed):
+                    actual_daily_tsb = ctl_progression[i+1] - atl_progression[i+1]
+                    actual_daily_shape = (2 * ctl_progression[i+1]) - atl_progression[i+1]
+                    print(f"Day {i+1}: TSS={tss_progression[i]:.2f}, "
+                          f"CTL={ctl_progression[i+1]:.2f}, ATL={atl_progression[i+1]:.2f}, TSBAct={actual_daily_tsb:.2f}, "
+                          f"Shape={actual_daily_shape:.2f}")
             
             # --- UPDATED: Added 'Shape' to weekly summary ---
             print("\n--- Weekly Summary ---")
